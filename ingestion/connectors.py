@@ -1,49 +1,27 @@
-"""Format connectors. Each one reads a landing file into a DataFrame with a
-single string column, `raw_payload`, holding the record as JSON.
-
-Bronze keeps the raw payload, so schema problems stay visible and nothing is
-lost before Phase 4 validation runs.
-"""
+"""Spark connectors: landing file to a DataFrame with raw_payload and line_no."""
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from pathlib import Path
 
 from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql import functions as F
+from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+from ingestion.landing_rows import landing_rows
+
+RAW_SCHEMA = StructType([
+    StructField("raw_payload", StringType(), False),
+    StructField("line_no", IntegerType(), False),
+])
 
 
-class Connector(ABC):
-    fmt: str
-
-    @abstractmethod
-    def read_raw(self, spark: SparkSession, path: str) -> DataFrame:
-        """Return a DataFrame with one string column, raw_payload."""
-
-
-class CsvConnector(Connector):
-    fmt = "csv"
-
-    def read_raw(self, spark: SparkSession, path: str) -> DataFrame:
-        # Every column is read as string: no type inference, so type-change faults survive into Bronze.
-        df = (
-            spark.read.option("header", "true")
-            .option("inferSchema", "false")
-            .option("mode", "PERMISSIVE")
-            .csv(path)
-        )
-        return df.select(F.to_json(F.struct(*[F.col(c) for c in df.columns])).alias("raw_payload"))
-
-
-class JsonlConnector(Connector):
-    fmt = "jsonl"
+class LandingConnector:
+    def __init__(self, fmt: str) -> None:
+        self.fmt = fmt
 
     def read_raw(self, spark: SparkSession, path: str) -> DataFrame:
-        # Each line is kept untouched. Corrupt JSON is passed through for the quality layer.
-        return (
-            spark.read.text(path)
-            .where(F.trim(F.col("value")) != "")
-            .select(F.col("value").alias("raw_payload"))
-        )
+        # Tuples are (raw_payload, line_no) to match RAW_SCHEMA.
+        rows = [(raw, n) for n, raw in landing_rows(Path(path), self.fmt)]
+        return spark.createDataFrame(rows, schema=RAW_SCHEMA)
 
 
-CONNECTORS: dict[str, Connector] = {c.fmt: c for c in (CsvConnector(), JsonlConnector())}
+CONNECTORS = {fmt: LandingConnector(fmt) for fmt in ("csv", "jsonl")}

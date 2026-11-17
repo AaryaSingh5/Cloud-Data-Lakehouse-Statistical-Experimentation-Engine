@@ -1,11 +1,10 @@
-"""Quality runner: checks every ingestion run that has not been checked yet.
+"""Quality runner: checks ingestion runs that have no verdict yet, or a run passed in by id.
 
 Usage:
     python -m quality.runner                 # all pending runs
     python -m quality.runner --source pos    # one source
 
-Row numbers in findings are positions in the Bronze batch sorted by payload.
-They are stable across reruns but are not file line numbers.
+Row positions in findings follow Bronze line order. Quarantine maps positions to line numbers.
 """
 from __future__ import annotations
 
@@ -16,17 +15,16 @@ import logging
 import sys
 from pathlib import Path
 
-from pyspark.sql import functions as F
-
 from common.config import load_config
 from common.migrate import apply as migrate
 from common.spark import get_spark
 from ingestion import run_log
-from ingestion.bronze import bronze_path
+from ingestion.bronze_read import read_batch
 from quality import store
 from quality.config import Registry, RulesConfig, load_registry, load_rules
 from quality.engine import evaluate
 from quality.types import BatchInput, RawRecord
+from recovery import quarantine
 
 logger = logging.getLogger("quality")
 
@@ -39,6 +37,18 @@ PENDING_SQL = """
       AND (%(source)s IS NULL OR r.source = %(source)s)
     ORDER BY r.batch_date, r.source, r.started_at
 """
+
+RUN_SQL = """
+    SELECT r.run_id::text, r.source, r.batch_id::text, r.batch_date, r.file_path, r.status
+    FROM ingestion_runs r
+    WHERE r.run_id = %s
+"""
+
+
+def fetch_run(conn, run_id: str):
+    with conn.cursor() as cur:
+        cur.execute(RUN_SQL, (run_id,))
+        return cur.fetchone()
 
 
 def _csv_header(file_path: str) -> list[str]:
@@ -56,17 +66,6 @@ def _union_keys(payloads: list[dict | None]) -> list[str]:
             for k in p:
                 seen.setdefault(k, None)
     return list(seen)
-
-
-def _bronze_raw(spark, cfg: dict, batch_id: str) -> list[str]:
-    df = (
-        spark.read.format("delta")
-        .load(bronze_path(cfg))
-        .where(F.col("batch_id") == batch_id)
-        .select("raw_payload")
-        .orderBy("raw_payload")
-    )
-    return [row[0] for row in df.collect()]
 
 
 def _parse(raws: list[str]) -> list[dict | None]:
@@ -87,7 +86,9 @@ def process(conn, spark, cfg: dict, registry: Registry, rules: RulesConfig, run:
         logger.warning("no schema registered for source %s; skipping run %s", source, run_id)
         return {"run_id": run_id, "verdict": "SKIPPED"}
 
-    raws = _bronze_raw(spark, cfg, batch_id) if status == "success" and batch_id else []
+    line_nos, raws = (
+        read_batch(spark, cfg, batch_id) if (status == "success" and batch_id) else ([], [])
+    )
     payloads = _parse(raws)
     observed = _csv_header(file_path) if schema.fmt == "csv" else _union_keys(payloads)
     history = store.history(conn, source, batch_date, int(rules.defaults["history_window"]))
@@ -101,11 +102,11 @@ def process(conn, spark, cfg: dict, registry: Registry, rules: RulesConfig, run:
     )
     result = evaluate(batch, schema, rules, registry.ts_format, history)
     store.save(conn, run_id, source, batch_date, batch_id, result, rules.severity)
-    logger.info(
-        "%s %s run=%s verdict=%s bad_rows=%d",
-        source, batch_date, run_id[:8], result.verdict, result.bad_rows,
-    )
-    return {"run_id": run_id, "verdict": result.verdict}
+    quarantine.sync(conn, run_id, source, batch_date, result, raws, line_nos)
+
+    logger.info("%s %s run=%s verdict=%s bad_rows=%d",
+                source, batch_date, run_id[:8], result.verdict, result.bad_rows)
+    return {"run_id": run_id, "verdict": result.verdict, "bad_rows": result.bad_rows}
 
 
 def run(cfg: dict | None = None, source: str | None = None) -> list[dict]:

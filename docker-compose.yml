@@ -1,4 +1,14 @@
 services:
+
+  dashboard:
+    build: .
+    command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+    ports:
+      - "127.0.0.1:8501:8501"
+    volumes:
+      - .:/app
+    depends_on:
+      - postgres
   minio:
     image: cgr.dev/chainguard/minio:latest
     command: server /data --console-address ":9001"
@@ -55,12 +65,12 @@ services:
     volumes:
       - .:/app
     working_dir: /app
-    ports:
-      - "8501:8501"   # Streamlit (Phase 8)
 
   # Optional: only starts with `docker compose --profile airflow up -d` (used from Phase 7)
   airflow:
-    image: apache/airflow:2.9.3
+    build:
+      context: .
+      dockerfile: orchestration/Dockerfile.airflow
     profiles: ["airflow"]
     command: standalone
     environment:

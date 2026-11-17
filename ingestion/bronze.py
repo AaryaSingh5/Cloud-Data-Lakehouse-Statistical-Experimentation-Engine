@@ -1,4 +1,4 @@
-"""Bronze writer: raw, append-only Delta table with metadata columns.
+"""Bronze writer: raw, append-only Delta table with metadata and line numbers.
 
 Location: s3a://<storage.buckets.bronze>/sales_raw
 """
@@ -33,6 +33,7 @@ def write_bronze(
         F.lit(lf.delivered_date.isoformat()).cast("date").alias("delivered_date"),
         F.lit(lf.batch_date.isoformat()).cast("date").alias("batch_date"),
         F.col("raw_payload"),
+        F.col("line_no"),
     )
     n = out.count()
     if n == 0:

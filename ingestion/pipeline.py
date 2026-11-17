@@ -16,12 +16,14 @@ from pathlib import Path
 from pyspark.sql import SparkSession
 
 from common.config import load_config
+from common.retry import is_transient, with_retry
 from common.spark import get_spark
 from ingestion import run_log
 from ingestion.bronze import write_bronze
 from ingestion.connectors import CONNECTORS
 from ingestion.landing import LandingFile, discover, sha256_file
 from ingestion.run_log import RunRecord
+from recovery.log import record
 
 logger = logging.getLogger("ingestion")
 
@@ -59,21 +61,24 @@ def ingest_file(spark: SparkSession, conn, lf: LandingFile, cfg: dict) -> RunRec
     batch_id = str(uuid.uuid4())
     try:
         raw = CONNECTORS[lf.fmt].read_raw(spark, str(lf.path))
-        rows = write_bronze(raw, lf, batch_id, file_hash, cfg)
+        rows, attempts = with_retry(
+            lambda: write_bronze(raw, lf, batch_id, file_hash, cfg),
+            label=f"bronze {lf.path.name}",
+        )
     except Exception as exc:  # noqa: BLE001 - one bad file must not stop the batch
         logger.exception("failed to ingest %s", lf.path)
+        if is_transient(exc):
+            record(conn, "retry", lf.path.name, started, "failed", str(exc)[:500])
         return _finish(conn, lf, file_hash, started, status="failed", error=str(exc)[:2000])
+
+    if attempts > 1:
+        record(conn, "retry", lf.path.name, started, "recovered", f"attempts={attempts}")
 
     if rows == 0:
         return _finish(conn, lf, file_hash, started, status="empty")
     return _finish(
-        conn,
-        lf,
-        file_hash,
-        started,
-        status="success",
-        batch_id=batch_id,
-        rows_written=rows,
+        conn, lf, file_hash, started,
+        status="success", batch_id=batch_id, rows_written=rows,
     )
 
 
