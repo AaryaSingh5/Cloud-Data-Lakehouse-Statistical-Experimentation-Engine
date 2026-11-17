@@ -1,0 +1,50 @@
+# Quality rules (4.8). severity: warn | block.
+#   batch-level rules: a trigger sets the verdict at that severity.
+#   row-level rules: failing rows become findings (quarantined in Phase 6).
+#     block severity: any failing row blocks the batch.
+#     warn severity: rows count toward bad_row_rate; the batch blocks only above max_bad_row_rate.
+# Verdicts: BLOCK if any block rule fired, WARN if any rule fired, otherwise PASS.
+
+defaults:
+  max_bad_row_rate: 0.10 # more than this share of bad rows blocks the batch
+  history_window: 14 # prior non-blocked batches used as baseline (4.7)
+  min_history_batches: 5 # below this, anomaly checks are skipped
+  volume_ratio: [0.5, 2.0] # row count vs median baseline
+  distribution_ratio: [0.8, 1.25] # mean price and mean quantity vs median baseline
+
+schema:
+  unknown_column: auto_merge # auto_merge (non-breaking) | quarantine (breaking)
+
+rules:
+  empty_batch: { level: batch, severity: block }
+  schema_breaking: { level: batch, severity: block }
+  schema_unknown_column: { level: batch, severity: warn }
+  schema_alias_mapped: { level: batch, severity: warn }
+  bad_row_rate: { level: batch, severity: block }
+  volume_anomaly: { level: batch, severity: warn }
+  distribution_anomaly: { level: batch, severity: warn }
+  unparseable_record: { level: row, severity: warn }
+  null_value: { level: row, severity: warn }
+  invalid_value: { level: row, severity: warn }
+  duplicate_exact: { level: row, severity: warn }
+  duplicate_key_conflict: { level: row, severity: block }
+
+# Value rules use canonical column names (after alias mapping).
+validity:
+  pos:
+    quantity: { min: 1, max: 100 }
+    unit_price: { min: 0.01, max: 200 }
+    product_id: { regex: '^P\d{4}$' }
+    store_id: { regex: '^S\d{2}$' }
+    payment_method: { allowed: [card, cash, upi, wallet] }
+  web:
+    quantity: { min: 1, max: 100 }
+    unit_price: { min: 0.01, max: 200 }
+    product_id: { regex: '^P\d{4}$' }
+    customer_id: { regex: '^C\d{5}$' }
+    country: { allowed: [IN, US, GB, DE, SG] }
+  partner:
+    units: { min: 1, max: 100 }
+    price_usd: { min: 0.01, max: 200 }
+    sku: { regex: '^P\d{4}$' }
+    region: { allowed: [APAC, EMEA, AMER] }

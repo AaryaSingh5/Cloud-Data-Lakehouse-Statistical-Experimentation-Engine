@@ -1,0 +1,63 @@
+# Schema registry (4.1). Canonical column names per source with types.
+# aliases: observed name -> canonical name. A matching alias is auto-mapped (warning, safe).
+# Add a new version when a source changes on purpose. Never edit a shipped version.
+ts_format: "%Y-%m-%d %H:%M:%S"
+
+sources:
+  pos:
+    format: csv
+    key: order_id
+    metrics: {price: unit_price, quantity: quantity}
+    versions:
+      - version: 1
+        columns:
+          order_id: string
+          order_ts: timestamp
+          store_id: string
+          product_id: string
+          quantity: int
+          unit_price: float
+          payment_method: string
+        aliases:
+          sku: product_id
+          qty: quantity
+          price: unit_price
+
+  web:
+    format: jsonl
+    key: order_id
+    metrics: {price: unit_price, quantity: quantity}
+    versions:
+      - version: 1
+        columns:
+          order_id: string
+          order_ts: timestamp
+          customer_id: string
+          product_id: string
+          quantity: int
+          unit_price: float
+          country: string
+        aliases:
+          sku: product_id
+          qty: quantity
+          price: unit_price
+          country_code: country
+
+  partner:
+    format: csv
+    key: order_ref
+    metrics: {price: price_usd, quantity: units}
+    versions:
+      - version: 1
+        columns:
+          order_ref: string
+          sold_at: timestamp
+          sku: string
+          units: int
+          price_usd: float
+          region: string
+        aliases:
+          product_code: sku
+          quantity: units
+          price: price_usd
+          sales_region: region
