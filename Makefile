@@ -1,4 +1,4 @@
-.PHONY: up down shell test gen smoke airflow-up lint ingest quality transform replay rollback refresh checks backfill lineage feeds impact metrics dashboard
+.PHONY: up down shell test gen smoke airflow-up lint ingest quality transform replay rollback refresh checks backfill lineage feeds impact metrics dashboard bench
 
 up:        ## build + start MinIO, Postgres, app container
 	docker compose up -d --build
@@ -60,5 +60,11 @@ metrics:   ## collect pipeline metrics into pipeline_metrics
 dashboard: ## start the Streamlit dashboard on http://localhost:8501
 	docker compose up -d dashboard
 
+bench:     ## WIPES derived data. Full benchmark: 3 seeds x low, medium, high (about 2 hours)
+	docker compose exec app python -m benchmark.run --yes
+
 airflow-up:
 	docker compose --profile airflow up -d --build airflow
+
+experiment: ## run an experiment on truth, platform, baseline: make experiment NAME=checkout START=2025-01-01 END=2025-01-14 LIFT=0.10
+	docker compose exec app python -m experimentation.run --name $(NAME) --start $(START) --end $(END) --lift $(LIFT)
